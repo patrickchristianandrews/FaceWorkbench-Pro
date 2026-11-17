@@ -1,0 +1,1 @@
+Implement the remaining master spec as real, verified functionality. Never present unavailable models, fake confidence scores, static charts, or incomplete API routes as working. Keep user data local and honor strict change scope. Run tests and verify native Windows packaging on Windows.
