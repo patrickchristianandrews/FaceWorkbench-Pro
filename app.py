@@ -23,9 +23,19 @@ def sw(): return FileResponse(STATIC/'sw.js',media_type='text/javascript')
 @app.get('/api/status')
 def status(): return {'version':'0.1.0','settings':settings(),'models':model_status(),'people':len(database.people()),'capabilities':['detect','quality','gallery','verify','search','embeddings','calibration','tracking','selective-redaction','exif','backup']}
 @app.post('/api/analyze')
-async def analyze(file:UploadFile=File(...)):
+async def analyze(file:UploadFile=File(...),dense_landmarks:bool=Form(False),landmarks_3d:bool=Form(False)):
     try:
-        raw=await file.read(); faces=detect(decode(raw)); return {'faces':faces,'count':len(faces),'recognition_available':bool(enabled_recognizers()),'recognition_models':enabled_recognizers()}
+        raw=await file.read(); image=decode(raw); faces=detect(image)
+        if dense_landmarks or landmarks_3d:
+            from landmarks import infer_landmarks
+            for face in faces:
+                errors={}
+                for requested,key in ((dense_landmarks,'2d106det'),(landmarks_3d,'1k3d68')):
+                    if not requested:continue
+                    try:face[key]=infer_landmarks(image,face,key)
+                    except Exception as error:errors[key]=str(error)
+                if errors:face['landmark_warnings']=errors
+        return {'faces':faces,'count':len(faces),'recognition_available':bool(enabled_recognizers()),'recognition_models':enabled_recognizers()}
     except Exception as e: raise HTTPException(400,str(e))
 @app.post('/api/redact-image')
 async def redact_image(file:UploadFile=File(...),style:str=Form('blur')):
