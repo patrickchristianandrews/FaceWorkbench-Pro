@@ -57,3 +57,33 @@ def test_settings_accept_recognition_weights():
     finally:
         if original is None: CONFIG.unlink(missing_ok=True)
         else: CONFIG.write_bytes(original)
+
+def test_scrfd_multiscale_outputs_and_nms():
+    from scrfd import _parse_outputs,_nms
+    import numpy as np
+    side=320
+    outputs=[]
+    for width in (1,4,10):
+        for stride in (8,16,32):
+            outputs.append(np.zeros((1,(side//stride)**2*2,width),dtype=np.float32))
+    parsed=_parse_outputs(outputs,side)
+    assert sorted(parsed)==[8,16,32]
+    assert all(len(x)==3 for x in parsed.values())
+    indices=_nms([[0,0,10,10],[1,1,11,11],[30,30,40,40]],[0.9,0.8,0.7],0.3)
+    assert indices.tolist()==[0,2]
+
+def test_empirical_far_reporting():
+    from calibration import tar_at_far
+    rows=tar_at_far([0.9,0.8],[0.1,0.2,0.3],targets=(0.1,0.01))
+    assert len(rows)==2
+    assert rows[0]['observed_far']==0
+    assert rows[1]['sample_sufficient_for_target'] is False
+
+def test_npz_import_refuses_unknown_face():
+    import io,numpy as np
+    import database
+    mem=io.BytesIO()
+    np.savez_compressed(mem,**{'99999999_SFace':np.array([1.,0.],dtype=np.float32)})
+    result=database.import_vectors_npz(mem.getvalue())
+    assert result['imported']==0
+    assert result['errors']
