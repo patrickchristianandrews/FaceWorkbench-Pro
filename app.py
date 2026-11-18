@@ -238,3 +238,22 @@ def batch_folder(body:dict):
         results.append({'name':folder.name,'added':n,'warnings':errs[:10]})
     database.rebuild_indexes()
     return {'people':results}
+
+@app.post('/api/gallery/duplicate-check')
+async def duplicate_check(file:UploadFile=File(...)):
+    """Offer a pre-enrollment similarity warning; never assert a confirmed identity."""
+    try:
+        image=decode(await file.read())
+        faces=detect(image)
+        if not faces:
+            raise ValueError('No detectable face')
+        vectors,errors=extract_embeddings(image,max(faces,key=lambda f:f['quality']['score']))
+        if not vectors:
+            return {'available':False,'candidates':[],'warnings':errors,
+                    'note':'Duplicate checking requires installed and enabled recognition weights.'}
+        candidates=search_vectors(vectors,top_k=5,unfiltered=True)
+        return {'available':True,
+                'candidates':[c for c in candidates if c['above_threshold']],
+                'warnings':errors,'note':'Similarity warning only; confirm with the person before merging records.'}
+    except Exception as e:
+        raise HTTPException(422,str(e))
