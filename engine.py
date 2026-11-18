@@ -68,7 +68,7 @@ def _onnx_session(model):
         key=(str(path),int(path.stat().st_mtime),settings()['cpu_threads'])
         if key not in _SESSIONS:
             opt=ort.SessionOptions();opt.intra_op_num_threads=key[2]
-            _SESSIONS.clear();_SESSIONS[key]=ort.InferenceSession(str(path),sess_options=opt,providers=['CPUExecutionProvider'])
+            _SESSIONS[key]=ort.InferenceSession(str(path),sess_options=opt,providers=['CPUExecutionProvider'])
         return _SESSIONS[key]
 
 def enabled_recognizers():
@@ -79,25 +79,36 @@ def enabled_recognizers():
 RECOGNITION_MODELS={'antelopev2','AdaFace','AuraFace','buffalo_l','buffalo_s','buffalo_sc','ElasticFace','MagFace','SFace','raccoon_s','raccoon_l','cheetah_s','cheetah_l'}
 
 def embedding(image,face,model):
+    """Extract a normalized face descriptor with optional flip augmentation."""
     if model not in RECOGNITION_MODELS:raise ValueError('Not a face recognition model')
     crop=align(image,face)
+    augment=bool(settings().get('flip_augmentation',True))
+    crops=[crop,cv2.flip(crop,1)] if augment else [crop]
+    vectors=[]
     if model=='SFace':
-        # SFace has a dedicated OpenCV preprocessing path and outputs 128-D vectors.
         from registry import MODELS,MODEL_REGISTRY
         recognizer=cv2.FaceRecognizerSF.create(str(MODELS/MODEL_REGISTRY['SFace']),'')
-        vector=recognizer.feature(crop).reshape(-1).astype(np.float32)
+        for view in crops:
+            vectors.append(np.asarray(recognizer.feature(view),dtype=np.float32).reshape(-1))
     else:
         session=_onnx_session(model)
         inp=session.get_inputs()[0];shape=inp.shape
         if len(shape)!=4 or shape[1] not in (3,'3',None):raise ValueError(f'Unsupported ONNX input for {model}: {shape}')
         size=112 if not isinstance(shape[2],int) else shape[2]
-        rgb=cv2.cvtColor(cv2.resize(crop,(size,size)),cv2.COLOR_BGR2RGB)
-        tensor=((rgb.astype(np.float32)-127.5)/127.5).transpose(2,0,1)[None]
-        vector=np.asarray(session.run(None,{inp.name:tensor})[0],dtype=np.float32).ravel()
+        for view in crops:
+            rgb=cv2.cvtColor(cv2.resize(view,(size,size)),cv2.COLOR_BGR2RGB)
+            tensor=((rgb.astype(np.float32)-127.5)/127.5).transpose(2,0,1)[None]
+            vectors.append(np.asarray(session.run(None,{inp.name:tensor})[0],dtype=np.float32).ravel())
+    normalized=[]
+    for vector in vectors:
         if vector.size not in (128,256,512):raise ValueError(f'Unexpected recognition output size: {vector.size}')
-    norm=np.linalg.norm(vector)
-    if not np.isfinite(norm) or norm<1e-8:raise ValueError('Invalid ONNX embedding')
-    return (vector/norm).astype(np.float32)
+        norm=np.linalg.norm(vector)
+        if not np.isfinite(norm) or norm<1e-8:raise ValueError('Invalid ONNX embedding')
+        normalized.append(vector/norm)
+    fused=np.mean(normalized,axis=0)
+    final_norm=np.linalg.norm(fused)
+    if not np.isfinite(final_norm) or final_norm<1e-8:raise ValueError('Invalid augmented face embedding')
+    return (fused/final_norm).astype(np.float32)
 
 def extract_embeddings(image,face,models=None):
     vectors={};warnings={}
@@ -112,10 +123,11 @@ def compare_vectors(a,b):
         if a[model].shape==b[model].shape:
             scores[model]=float(np.clip(np.dot(a[model],b[model]),-1,1))
     if not scores:raise ValueError('No compatible recognition model embeddings')
-    fusion=float(np.mean(list(scores.values())))
+    weights=settings().get('model_weights',{})
+    fusion=float(np.average(list(scores.values()),weights=[max(0.001,float(weights.get(m,1))) for m in scores]))
     return {'fused_similarity':round(fusion,5),'threshold':settings()['threshold'],
             'above_threshold':fusion>=settings()['threshold'],
-            'scores':{m:{'cosine':round(v,5),'euclidean':round(float(np.linalg.norm(a[m]-b[m])),5),'weight':1,
+            'scores':{m:{'cosine':round(v,5),'euclidean':round(float(np.linalg.norm(a[m]-b[m])),5),'weight':max(0.001,float(weights.get(m,1))),
                           'above_threshold':v>=settings()['threshold']} for m,v in scores.items()},
             'note':'Cosine threshold is not a calibrated probability of identity'}
 
@@ -132,7 +144,8 @@ def search_vectors(probe,top_k=10,unfiltered=False):
     results=[]
     for item in candidates.values():
         by_model={k:max(v) for k,v in item['scores'].items()}
-        s=float(np.mean(list(by_model.values())))
+        weights=settings().get('model_weights',{})
+        s=float(np.average(list(by_model.values()),weights=[max(0.001,float(weights.get(m,1))) for m in by_model]))
         if unfiltered or s>=settings()['threshold']:
             results.append({'person_id':item['person_id'],'name':item['name'],'similarity':round(s,5),
                             'models':{k:round(v,5) for k,v in by_model.items()},'above_threshold':s>=settings()['threshold']})
