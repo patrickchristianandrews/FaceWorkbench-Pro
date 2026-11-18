@@ -32,7 +32,27 @@ function setupImagePicker(input){
  const zone=input?.closest('.drop');
  if(!zone)return;
  const label=zone.querySelector('small');
- const update=()=>{const file=input.files?.[0];if(label)label.textContent=file?(input.files.length>1?input.files.length+' photos selected':file.name):'Click to browse your device';};
+ let preview=zone.querySelector('.local-thumbnails');
+ if(!preview){preview=document.createElement('div');preview.className='local-thumbnails';preview.setAttribute('aria-live','polite');zone.appendChild(preview);}
+ let selection=0;
+ const update=async()=>{
+   const files=[...(input.files||[])];
+   const file=files[0];
+   if(label)label.textContent=file?(files.length>1?files.length+' photos selected':file.name):'Click to browse your device';
+   const current=++selection;preview.replaceChildren();
+   const samples=files.filter(f=>f.type.startsWith('image/')).slice(0,4);
+   for(const sample of samples){
+     try{
+       const url=await readImageData(sample);
+       if(current!==selection)return;
+       const thumbnail=document.createElement('img');
+       thumbnail.src=url;thumbnail.alt='Selected local photo: '+sample.name;
+       thumbnail.onload=()=>{if(!thumbnail.naturalWidth)thumbnail.remove()};
+       thumbnail.onerror=()=>{thumbnail.replaceWith(document.createTextNode('Cannot preview '+sample.name))};
+       preview.appendChild(thumbnail);
+     }catch(error){if(current===selection)preview.textContent='Preview failed: '+error.message}
+   }
+ };
  input.addEventListener('change',update);
  zone.addEventListener('dragover',e=>{e.preventDefault();zone.classList.add('dragover')});
  zone.addEventListener('dragleave',()=>zone.classList.remove('dragover'));
