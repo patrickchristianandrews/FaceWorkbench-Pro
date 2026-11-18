@@ -5,7 +5,7 @@ DATA = Path(os.environ.get('DATA_DIR',ROOT/'data'))
 MODELS = Path(os.environ.get('MODELS_DIR',ROOT/'models'))
 DATA.mkdir(parents=True, exist_ok=True); MODELS.mkdir(parents=True,exist_ok=True)
 CONFIG = ROOT/'config.json'
-DEFAULT={'threshold':0.55,'detector':'yunet','detection_size':640,'cpu_threads':4,'active_packs':['SFace']}
+DEFAULT={'threshold':0.55,'detector':'yunet','detection_size':640,'cpu_threads':4,'active_packs':['SFace'],'flip_augmentation':True,'model_weights':{}}
 MODEL_REGISTRY = {
 'antelopev2':'glintr100.onnx','AdaFace':'adaface_ir101.onnx','AuraFace':'auraface_r100.onnx',
 'buffalo_l':'w600k_r50.onnx','buffalo_s':'w600k_mbf.onnx','buffalo_sc':'buffalo_sc_rec.onnx',
@@ -27,6 +27,11 @@ def save_settings(value):
     if 'detection_size' in value and int(value['detection_size']) in (320,640,1024): current['detection_size']=int(value['detection_size'])
     if 'cpu_threads' in value: current['cpu_threads']=max(1,min(32,int(value['cpu_threads'])))
     if 'active_packs' in value: current['active_packs']=[x for x in value['active_packs'] if x in MODEL_REGISTRY]
+    if 'flip_augmentation' in value: current['flip_augmentation']=bool(value['flip_augmentation'])
+    if 'model_weights' in value:
+        if not isinstance(value['model_weights'],dict):raise ValueError('Model weights must be an object')
+        current['model_weights']={k:max(0.001,min(100.0,float(v))) for k,v in value['model_weights'].items()
+                                  if k in MODEL_REGISTRY and k not in ('YuNet','emotion','mask','MiniFASNet','1k3d68')}
     CONFIG.write_text(json.dumps(current,indent=2)); return current
 def model_status():
     return [{'key':key,'filename':filename,'installed':(MODELS/filename).is_file(),'fetchable':key in PUBLIC_FETCH,'active':key in settings().get('active_packs',[]),'recognition':key in ('antelopev2','AdaFace','AuraFace','buffalo_l','buffalo_s','buffalo_sc','ElasticFace','MagFace','SFace','raccoon_s','raccoon_l','cheetah_s','cheetah_l')} for key,filename in MODEL_REGISTRY.items()]
