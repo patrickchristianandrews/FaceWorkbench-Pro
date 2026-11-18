@@ -21,6 +21,32 @@ def pairs(model):
     hard.sort(key=lambda x:x['similarity'],reverse=True)
     return pos,neg,hard[:30]
 
+def tar_at_far(genuine, impostor, targets=(0.1,0.01,0.001,0.0001)):
+    """Noninterpolated empirical TAR at each requested FAR.
+
+    A target with fewer than 1 / FAR distinct-identity comparisons cannot
+    demonstrate an event at that FAR; report this explicitly.
+    """
+    genuine=np.asarray(genuine,dtype=np.float64)
+    impostor=np.asarray(impostor,dtype=np.float64)
+    if not len(genuine) or not len(impostor):
+        raise ValueError('Both genuine and impostor comparisons required')
+    if not np.isfinite(genuine).all() or not np.isfinite(impostor).all():
+        raise ValueError('Non-finite similarity score')
+    results=[]
+    for target in targets:
+        if not 0<float(target)<1:raise ValueError('FAR must be strictly between zero and one')
+        ordered=np.sort(impostor)[::-1]
+        allowed=int(np.floor(len(ordered)*float(target)))
+        # strict > kth offending impostor score ensures <= allowed false accepts
+        threshold=float(np.nextafter(ordered[allowed],np.inf)) if allowed<len(ordered) else -1.0
+        results.append({'target_far':float(target),'threshold':threshold,
+                        'observed_tar':float(np.mean(genuine>=threshold)),
+                        'observed_far':float(np.mean(impostor>=threshold)),
+                        'impostor_pairs':len(impostor),'genuine_pairs':len(genuine),
+                        'sample_sufficient_for_target':len(impostor)>=1.0/float(target)})
+    return results
+
 def calibrate(model,target_far=.01):
     if not 0<target_far<1:raise ValueError('Target FAR must be between zero and one')
     pos,neg,hard=pairs(model)
@@ -33,7 +59,7 @@ def calibrate(model,target_far=.01):
     roc=[]
     for t in np.linspace(-1,1,101):
         values=metrics(pos,neg,float(t));roc.append({'far':values['far'],'tar':values['tar'],'threshold':float(t)})
-    result={'model':model,'target_far':target_far,'threshold':threshold,**scores,'roc':roc,'hard_negatives':hard,
+    result={'model':model,'target_far':target_far,'threshold':threshold,**scores,'roc':roc,'tar_at_far':tar_at_far(pos,neg),'hard_negatives':hard,
             'warning':'Empirical sample statistics only; this threshold is not a validated operating FAR on unseen subjects.'}
     record_calibration(model,threshold,result)
     return result
