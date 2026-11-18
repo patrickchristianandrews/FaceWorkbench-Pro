@@ -96,3 +96,29 @@ def test_packaged_uvicorn_config_without_console(monkeypatch):
     server=desktop.create_server(0)
     assert server.config.log_config is None
     assert server.config.access_log is False
+
+def test_valid_image_upload_and_static_frontend():
+    """Image data must reach the API independently of any downloaded ONNX weights."""
+    image=np.full((150,180,3),127,dtype=np.uint8)
+    ok,encoded=cv2.imencode('.png',image)
+    assert ok
+    response=client.post('/api/analyze',files={'file':('input.png',encoded.tobytes(),'image/png')})
+    assert response.status_code==200,response.text
+    assert 'faces' in response.json()
+    script=client.get('/static/app.js')
+    assert script.status_code==200
+    assert 'readImageData' in script.text and 'studioPreviewStatus' in script.text
+
+def test_gallery_image_route_returns_stored_png(monkeypatch,tmp_path):
+    import database
+    crops=tmp_path/'crops';crops.mkdir()
+    monkeypatch.setattr(database,'CROPS',crops)
+    target=crops/'test-gallery.png'
+    image=np.full((60,60,3),130,dtype=np.uint8)
+    ok,encoded=cv2.imencode('.png',image)
+    assert ok
+    target.write_bytes(encoded.tobytes())
+    response=client.get('/api/crops/test-gallery.png')
+    assert response.status_code==200
+    assert response.headers['content-type'].startswith('image/png')
+    assert response.content==encoded.tobytes()
