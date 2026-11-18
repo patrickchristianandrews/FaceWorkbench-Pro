@@ -1,0 +1,49 @@
+name: Build single-file Windows EXE
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-windows-exe.yml'
+      - '*.py'
+      - 'requirements.txt'
+      - 'static/**'
+
+permissions:
+  contents: read
+
+jobs:
+  windows-exe:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out FaceWorkbench Pro
+        uses: actions/checkout@v4
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Run smoke tests
+        shell: pwsh
+        run: |
+          python -m pip install pytest httpx
+          python -m pytest -q test_smoke.py
+      - name: Compile single-file Windows desktop executable
+        shell: pwsh
+        run: |
+          python -m PyInstaller desktop.py --name FaceWorkbench-Pro --onefile --windowed --noconfirm --clean --add-data "static;static" --collect-all webview --collect-all onnxruntime --collect-all faiss --collect-submodules sklearn --hidden-import uvicorn.logging --hidden-import uvicorn.loops.auto --hidden-import uvicorn.protocols.http.auto --hidden-import uvicorn.lifespan.on
+          if (!(Test-Path "dist/FaceWorkbench-Pro.exe")) { throw "Executable not created" }
+      - name: Upload downloadable executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: FaceWorkbench-Pro-Windows-EXE
+          path: dist/FaceWorkbench-Pro.exe
+          if-no-files-found: error
+          retention-days: 30
