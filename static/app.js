@@ -11,6 +11,42 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const download=(blob,name)=>{const u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),2000)};
 const postFile=async(url,file,extra={})=>{const f=new FormData();f.append('file',file);Object.entries(extra).forEach(([k,v])=>f.append(k,v));return request(url,{method:'POST',body:f})};
 const uploadCard=(id,label='Select an image',accept='image/*',multiple=false)=>`<div class="drop"><span style="font-size:43px;color:#06b6d4">⤒</span><strong>${esc(label)}</strong><small>Click to browse your device</small><input type="file" id="${id}" accept="${accept}" ${multiple?'multiple':''}></div>`;
+function readImageData(file){
+ return new Promise((resolve,reject)=>{
+   if(!file || !file.type.startsWith('image/'))return reject(Error('Choose a supported image file.'));
+   const reader=new FileReader();
+   reader.onerror=()=>reject(Error('Unable to read the selected image from your device.'));
+   reader.onload=()=>resolve(reader.result);
+   reader.readAsDataURL(file);
+ });
+}
+function decodeLocalImage(file){
+ return readImageData(file).then(url=>new Promise((resolve,reject)=>{
+   const image=new Image();
+   image.onload=()=>resolve(image);
+   image.onerror=()=>reject(Error('Image format could not be displayed. Try a JPG or PNG.'));
+   image.src=url;
+ }));
+}
+function setupImagePicker(input){
+ const zone=input?.closest('.drop');
+ if(!zone)return;
+ const label=zone.querySelector('small');
+ const update=()=>{const file=input.files?.[0];if(label)label.textContent=file?(input.files.length>1?input.files.length+' photos selected':file.name):'Click to browse your device';};
+ input.addEventListener('change',update);
+ zone.addEventListener('dragover',e=>{e.preventDefault();zone.classList.add('dragover')});
+ zone.addEventListener('dragleave',()=>zone.classList.remove('dragover'));
+ zone.addEventListener('drop',e=>{
+   e.preventDefault();zone.classList.remove('dragover');
+   const items=[...(e.dataTransfer?.files||[])].filter(file=>input.accept.includes('image')?file.type.startsWith('image/'):true);
+   if(!items.length)return notify('No supported files were dropped.');
+   const transfer=new DataTransfer();
+   (input.multiple?items:items.slice(0,1)).forEach(file=>transfer.items.add(file));
+   input.files=transfer.files;
+   input.dispatchEvent(new Event('change',{bubbles:true}));
+ });
+ update();
+}
 const warn=txt=>`<div class="notice">${txt}</div>`;
 const templates={
 studio:()=>`<div class="grid"><div class="panel"><h2>Image Analysis Studio</h2><p class="muted">Upload an image to detect faces, inspect location and image quality, and create a redacted copy.</p>${uploadCard('studioFile','Drop or select an image')}<div class="actions"><button class="primary" id="analyze">Analyze image</button><button id="openCamera">Start camera</button><button id="captureCamera" disabled>Capture photo</button><button id="stopCamera" disabled>Stop camera</button><label><input type="checkbox" id="dense2d"> 106-point mesh</label><label><input type="checkbox" id="dense3d"> 68-point 3D</label><button id="blurImage">Redact all faces</button><button id="exportJson">Export analysis JSON</button></div><video id="cameraPreview" autoplay playsinline muted style="display:none;width:100%;max-height:380px;border-radius:12px"></video><canvas id="imageCanvas" height="380"></canvas></div><div class="panel"><h2>Detection telemetry</h2><div class="grid3"><div class="stat"><span class="value" id="faceCount">—</span><small>Faces detected</small></div><div class="stat"><span class="value" id="qualityScore">—</span><small>Top quality</small></div><div class="stat"><span class="value" id="modelMode">—</span><small>Detector</small></div></div><h3 style="margin-top:25px">Face quality gates</h3><div id="faceList" class="items"><p class="muted">Run detection to populate telemetry.</p></div><h3>Recognition and gallery comparison</h3><div class='actions'><button id='searchImage'>Search identity gallery</button><button id='lookalikeImage'>Find lookalikes</button></div><p class='muted'>Compare two photos with the same installed recognition model(s). Scores are similarity measures, not identity probabilities.</p>${uploadCard('verifyFile','Select comparison photo')}<button id='verifyImages'>Compare images</button><div id='recognitionResults' class='items'></div></div></div>`,
@@ -23,12 +59,51 @@ osint:()=>`<div class="grid"><div class="panel"><h2>Local Image Metadata Inspect
 settings:()=>`<div class="grid"><div class="panel"><h2>Local System Settings</h2><div class="field"><label>Face detection backend</label><select id="detector"><option value="haar">OpenCV Haar (built in)</option><option value="yunet">OpenCV YuNet (requires ONNX)</option><option value="scrfd">SCRFD (when installed)</option></select></div><div class="field"><label>Cosine similarity threshold: <span id="thresholdLabel"></span></label><input type="range" id="threshold" min=".1" max=".95" step=".01"/></div><div class="field"><label>Detection input size</label><select id="detectionSize"><option>320</option><option>640</option><option>1024</option></select></div><div class="field"><label>ONNX Runtime CPU threads</label><input id="threads" type="number" min="1" max="32"/></div><div class="field"><label><input type="checkbox" id="flipAug"> Horizontal-flip recognition augmentation (more robust, slower)</label></div><button class="primary" id="saveSettings">Save preferences</button><div class="actions"><button id="backfillEmb">Re-embed gallery crops</button><button id="reindexEmb">Rebuild FAISS</button><button id="exportEmb">Export vectors JSON</button><button id="exportNPZ">Export vectors NPZ</button></div><div class="actions"><button id="backupSettings">Export gallery backup</button></div></div><div class="panel"><h2>Model weight registry</h2><p class="muted">A listing indicates an expected weight filename, not a working model integration. Two OpenCV Zoo weights have verified public download locations.</p><div class="items" id="modelList">Loading…</div></div></div>`};
 async function refreshPeople(){people=await request('/api/people');$('#countLabel').textContent=`${people.length} IDENTITIES`;const grid=$('#peopleGrid');if(!grid)return;const query=($('#galleryFilter')?.value||'').toLowerCase();grid.innerHTML=people.filter(p=>p.name.toLowerCase().includes(query)).map(p=>`<div class="person"><div id="avatar-${p.id}" class="muted" style="height:115px">No sample</div><b>${esc(p.name)}</b><small>${p.samples} samples · Quality ${p.quality??'—'}</small><button data-person="${p.id}">Manage</button></div>`).join('')||'<p class="muted">No stored identities yet.</p>';for(const p of people){const target=$(`#avatar-${p.id}`);if(!target)continue;const sm=await request(`/api/people/${p.id}/samples`);if(sm.length)target.outerHTML=`<img src="/api/crops/${encodeURIComponent(sm[0].crop)}" alt="Stored face crop">`;}grid.querySelectorAll('[data-person]').forEach(b=>b.onclick=()=>managePerson(+b.dataset.person))}
 async function managePerson(pid){const p=people.find(p=>p.id===pid);const cmd=prompt(`Manage ${p.name}\nType: rename, delete, merge, or samples`,'samples');if(!cmd)return;try{if(cmd==='rename'){let name=prompt('New name',p.name);if(name)await request(`/api/people/${pid}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})})}else if(cmd==='delete'){if(confirm(`Permanently delete ${p.name} and stored crops?`))await request(`/api/people/${pid}`,{method:'DELETE'})}else if(cmd==='merge'){const target=+prompt(`Target ID (different from ${pid}):\n${people.map(x=>`${x.id}: ${x.name}`).join('\n')}`);if(target&&target!==pid&&confirm('Move all photos and delete source identity?'))await request('/api/people/merge',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:pid,target})})}else if(cmd==='samples'){const samples=await request(`/api/people/${pid}/samples`);const sid=+prompt(`Sample IDs for ${p.name}:\n${samples.map(s=>`${s.id} (quality ${s.quality})`).join('\n')}\nEnter an ID to delete one, or Cancel`);if(sid&&confirm('Delete this sample?'))await request(`/api/samples/${sid}`,{method:'DELETE'})}await refreshPeople()}catch(e){alert(e.message)}}
-function drawFaces(file,faces){const canvas=$('#imageCanvas');if(!canvas)return;const img=new Image();img.onload=()=>{const scale=Math.min(1,900/img.width,550/img.height);canvas.width=img.width*scale;canvas.height=img.height*scale;const ctx=canvas.getContext('2d');ctx.drawImage(img,0,0,canvas.width,canvas.height);ctx.lineWidth=2.5;ctx.font='bold 15px monospace';faces.forEach((f,i)=>{const [x,y,w,h]=f.box.map(x=>x*scale);ctx.strokeStyle='#06b6d4';ctx.strokeRect(x,y,w,h);ctx.fillStyle='#06b6d4';ctx.fillText(`FACE ${i+1}`,x+2,Math.max(16,y-6));f.keypoints.forEach(([a,b])=>{ctx.beginPath();ctx.arc(a*scale,b*scale,3,0,7);ctx.fill()});for(const [key,color] of [['2d106det','#06b6d4'],['1k3d68','#818cf8']]){
- const landmarks=f[key]?.points||[];
- ctx.fillStyle=color;
- for(const point of landmarks){ctx.beginPath();ctx.arc(point[0]*scale,point[1]*scale,1.4,0,Math.PI*2);ctx.fill();}
-}})};img.src=URL.createObjectURL(file)}
-async function render(name){if(cameraStream)stopCameraStream();tab=name;$('#heading').textContent=({studio:'Studio',gallery:'Identities & Gallery',lookalikes:'Lookalikes & Clusters',behaviour:'Behaviour',video:'Video & Tracking',calibration:'Calibration',osint:'OSINT Launchpad',settings:'System & Model Registry'})[name];document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));content.innerHTML=templates[name]();try{if(name==='studio'){
+async function drawFaces(file,faces=[]){
+ const canvas=$('#imageCanvas');if(!canvas)return;
+ const image=await decodeLocalImage(file);
+ const scale=Math.min(1,900/image.width,550/image.height);
+ canvas.width=Math.max(1,Math.round(image.width*scale));
+ canvas.height=Math.max(1,Math.round(image.height*scale));
+ const ctx=canvas.getContext('2d');
+ ctx.drawImage(image,0,0,canvas.width,canvas.height);
+ ctx.lineWidth=2.5;ctx.font='bold 15px monospace';
+ faces.forEach((face,i)=>{
+  const [x,y,w,h]=face.box.map(v=>v*scale);
+  ctx.strokeStyle='#06b6d4';ctx.strokeRect(x,y,w,h);
+  ctx.fillStyle='#06b6d4';ctx.fillText('FACE '+(i+1),x+2,Math.max(16,y-6));
+  for(const [a,b] of (face.keypoints||[])){
+   ctx.beginPath();ctx.arc(a*scale,b*scale,3,0,Math.PI*2);ctx.fill();
+  }
+  for(const [key,color] of [['2d106det','#06b6d4'],['1k3d68','#818cf8']]){
+   ctx.fillStyle=color;
+   for(const point of (face[key]?.points||[])){
+    ctx.beginPath();ctx.arc(point[0]*scale,point[1]*scale,1.4,0,Math.PI*2);ctx.fill();
+   }
+  }
+ });
+ return {width:image.width,height:image.height};
+}
+async function render(name){if(cameraStream)stopCameraStream();tab=name;$('#heading').textContent=({studio:'Studio',gallery:'Identities & Gallery',lookalikes:'Lookalikes & Clusters',behaviour:'Behaviour',video:'Video & Tracking',calibration:'Calibration',osint:'OSINT Launchpad',settings:'System & Model Registry'})[name];document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));content.innerHTML=templates[name]();content.querySelectorAll('.drop input[type=file]').forEach(setupImagePicker);try{if(name==='studio'){
+const studioInput=$('#studioFile');
+const info=document.createElement('p');
+info.id='studioPreviewStatus';
+info.className='muted';
+info.textContent='Choose a photo to preview it here before analysis.';
+studioInput.closest('.panel').querySelector('#imageCanvas').insertAdjacentElement('afterend',info);
+studioInput.addEventListener('change',async()=>{
+ const file=studioInput.files?.[0];
+ lastImage=file||null;lastResult=null;
+ if(!file)return;
+ info.textContent='Loading local preview…';
+ try{
+  const dimensions=await drawFaces(file,[]);
+  info.textContent='Image loaded locally: '+dimensions.width+' × '+dimensions.height+' px. Select Analyze image to detect faces.';
+ }catch(error){
+  info.textContent='Image preview failed: '+error.message;
+  notify(error.message);
+ }
+});
 $('#openCamera').onclick=async()=>{
  try{
   if(!navigator.mediaDevices?.getUserMedia)throw Error('Camera access requires a secure context (localhost or HTTPS).');
@@ -51,7 +126,7 @@ $('#captureCamera').onclick=()=>{
   stopCameraStream();$('#analyze').click();
  },'image/jpeg',0.92);
 };
-$('#searchImage').onclick=async()=>{if(!lastImage)return notify('Analyze a photo first');try{$('#recognitionResults').innerHTML=renderMatches(await postFile('/api/search',lastImage,{top_k:'10'}))}catch(e){notify(e.message)}};$('#lookalikeImage').onclick=async()=>{if(!lastImage)return notify('Analyze a photo first');try{$('#recognitionResults').innerHTML=renderMatches(await postFile('/api/search',lastImage,{top_k:'10',lookalikes:'true'}))}catch(e){notify(e.message)}};$('#verifyImages').onclick=async()=>{if(!lastImage||!$('#verifyFile').files[0])return notify('Choose both photos');const f=new FormData();f.append('a',lastImage);f.append('b',$('#verifyFile').files[0]);try{const r=await request('/api/verify',{method:'POST',body:f});$('#recognitionResults').innerHTML=`<div class='item'><b>Fused cosine similarity ${r.result.fused_similarity}</b> · Threshold ${r.result.threshold} · ${r.result.above_threshold?'Above':'Below'}</div>`+Object.entries(r.result.scores).map(([k,v])=>`<div class='item'>${esc(k)}: ${v.cosine} · Euclidean ${v.euclidean}</div>`).join('')}catch(e){notify(e.message)}};const cfg=await request('/api/settings');$('#modelMode').textContent=cfg.detector.toUpperCase();$('#analyze').onclick=async()=>{const file=$('#studioFile').files[0];if(!file)return notify('Select an image');try{lastImage=file;lastResult=await postFile('/api/analyze',file,{dense_landmarks:$('#dense2d').checked,landmarks_3d:$('#dense3d').checked});$('#faceCount').textContent=lastResult.count;$('#qualityScore').textContent=lastResult.faces.length?Math.round(lastResult.faces[0].quality.score*100)+'%':'—';$('#faceList').innerHTML=lastResult.faces.map((f,i)=>`<div class="item"><span>Face ${i+1} · ${f.box[2]}×${f.box[3]} px<br><em>Sharpness ${f.quality.sharpness} · Brightness ${f.quality.brightness}</em></span><span class="${f.quality.flags.length?'warning':'ok'}">${esc(f.quality.flags.join(', ')||'Passed')}</span></div>`).join('')||'<p class="muted">No faces detected.</p>';drawFaces(file,lastResult.faces);notify('Analysis complete')}catch(e){notify(e.message)}};$('#exportJson').onclick=()=>{if(lastResult)download(new Blob([JSON.stringify(lastResult,null,2)],{type:'application/json'}),'face-analysis.json');else notify('Analyze an image first')};$('#blurImage').onclick=async()=>{const f=$('#studioFile').files[0];if(!f)return notify('Select an image');try{download(await postFile('/api/redact-image',f),'redacted.png')}catch(e){notify(e.message)}}}
+$('#searchImage').onclick=async()=>{if(!lastImage)return notify('Analyze a photo first');try{$('#recognitionResults').innerHTML=renderMatches(await postFile('/api/search',lastImage,{top_k:'10'}))}catch(e){notify(e.message)}};$('#lookalikeImage').onclick=async()=>{if(!lastImage)return notify('Analyze a photo first');try{$('#recognitionResults').innerHTML=renderMatches(await postFile('/api/search',lastImage,{top_k:'10',lookalikes:'true'}))}catch(e){notify(e.message)}};$('#verifyImages').onclick=async()=>{if(!lastImage||!$('#verifyFile').files[0])return notify('Choose both photos');const f=new FormData();f.append('a',lastImage);f.append('b',$('#verifyFile').files[0]);try{const r=await request('/api/verify',{method:'POST',body:f});$('#recognitionResults').innerHTML=`<div class='item'><b>Fused cosine similarity ${r.result.fused_similarity}</b> · Threshold ${r.result.threshold} · ${r.result.above_threshold?'Above':'Below'}</div>`+Object.entries(r.result.scores).map(([k,v])=>`<div class='item'>${esc(k)}: ${v.cosine} · Euclidean ${v.euclidean}</div>`).join('')}catch(e){notify(e.message)}};const cfg=await request('/api/settings');$('#modelMode').textContent=cfg.detector.toUpperCase();$('#analyze').onclick=async()=>{const file=$('#studioFile').files[0];if(!file)return notify('Select an image');try{lastImage=file;lastResult=await postFile('/api/analyze',file,{dense_landmarks:$('#dense2d').checked,landmarks_3d:$('#dense3d').checked});$('#faceCount').textContent=lastResult.count;$('#qualityScore').textContent=lastResult.faces.length?Math.round(lastResult.faces[0].quality.score*100)+'%':'—';$('#faceList').innerHTML=lastResult.faces.map((f,i)=>`<div class="item"><span>Face ${i+1} · ${f.box[2]}×${f.box[3]} px<br><em>Sharpness ${f.quality.sharpness} · Brightness ${f.quality.brightness}</em></span><span class="${f.quality.flags.length?'warning':'ok'}">${esc(f.quality.flags.join(', ')||'Passed')}</span></div>`).join('')||'<p class="muted">No faces detected.</p>';await drawFaces(file,lastResult.faces);info.textContent='Detection completed: '+lastResult.count+' face(s).';notify('Analysis complete')}catch(e){info.textContent='Analysis failed: '+e.message+' — the selected image can still be previewed.';notify(e.message)}};$('#exportJson').onclick=()=>{if(lastResult)download(new Blob([JSON.stringify(lastResult,null,2)],{type:'application/json'}),'face-analysis.json');else notify('Analyze an image first')};$('#blurImage').onclick=async()=>{const f=$('#studioFile').files[0];if(!f)return notify('Select an image');try{download(await postFile('/api/redact-image',f),'redacted.png')}catch(e){notify(e.message)}}}
 if(name==='lookalikes'){$('#clusterBtn').onclick=async()=>{try{const s=await request('/api/gallery/embeddings/status');if(!s.models.length)return notify('No stored vectors');const r=await request('/api/clusters?model='+encodeURIComponent(s.models[0].model));$('#clusterResults').innerHTML=r.clusters.map(c=>`<div class='item'><b>Cluster ${c.cluster_id}</b> · ${c.size} samples · ${esc(c.members.map(m=>m.name).join(', '))}</div>`).join('')||'<p>No recurring clusters found</p>'}catch(e){notify(e.message)}};$('#topK').oninput=e=>$('#topKLabel').textContent=e.target.value;$('#runLookalikes').onclick=async()=>{const f=$('#lookalikeFile').files[0];if(!f)return notify('Choose image');try{const data=await postFile('/api/search',f,{top_k:$('#topK').value,lookalikes:'true'});$('#lookalikeResults').innerHTML=renderMatches(data)}catch(e){notify(e.message)}}}
 if(name==='calibration'){const status=await request('/api/gallery/embeddings/status');$('#calModel').innerHTML=status.models.map(x=>`<option value='${esc(x.model)}'>${esc(x.model)} (${x.n} samples)</option>`).join('');$('#calibrateBtn').onclick=async()=>{try{const r=await request('/api/calibration/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:$('#calModel').value,target_far:+$('#farTarget').value})});$('#calResults').innerHTML=`<p>Threshold: ${r.threshold.toFixed(5)} · TAR: ${(r.tar*100).toFixed(2)}% · observed FAR: ${(r.far*100).toFixed(2)}% · ${r.genuine_count} genuine / ${r.impostor_count} impostor pairs</p>`;$('#hardNeg').innerHTML=r.hard_negatives.map(a=>`<div class='item'>${esc(a.left)} / ${esc(a.right)} · ${a.similarity}</div>`).join('');drawRoc(r.roc)}catch(e){notify(e.message)}};$('#trainBtn').onclick=async()=>{try{const r=await request('/api/calibration/stacker',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({models:[$('#calModel').value]})});$('#calResults').innerHTML=`<p>Trained on ${r.pairs} pairs. Coefficients: ${esc(r.coefficients.join(', '))}. Training results are not held-out probabilities.</p>`}catch(e){notify(e.message)}}}
 if(name==='gallery'){await refreshPeople();$('#galleryFilter').oninput=refreshPeople;$('#enroll').onclick=async()=>{const label=$('#newName').value.trim(),files=[...$('#enrollFiles').files];if(!label||!files.length)return notify('Enter a label and choose photos');const fd=new FormData();fd.append('name',label);files.forEach(f=>fd.append('files',f));try{
