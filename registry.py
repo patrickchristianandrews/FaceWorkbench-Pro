@@ -4,6 +4,20 @@ ROOT = Path(sys.executable).parent if getattr(sys,'frozen',False) else Path(__fi
 DATA = Path(os.environ.get('DATA_DIR',ROOT/'data'))
 MODELS = Path(os.environ.get('MODELS_DIR',ROOT/'models'))
 DATA.mkdir(parents=True, exist_ok=True); MODELS.mkdir(parents=True,exist_ok=True)
+# PyInstaller one-file extracts read-only resources beneath sys._MEIPASS.
+# Copy the verified bundled OpenCV Zoo weights next to the EXE on first launch.
+# Existing user-installed weights are never overwritten.
+def install_bundled_models():
+    if not getattr(sys,'frozen',False):return
+    import shutil
+    resources=Path(getattr(sys,'_MEIPASS',ROOT))/'models'
+    if not resources.is_dir():return
+    for filename in ('face_detection_yunet_2023mar.onnx','face_recognition_sface_2021dec.onnx'):
+        source=resources/filename
+        target=MODELS/filename
+        if source.is_file() and source.stat().st_size>100000 and not target.exists():
+            shutil.copyfile(source,target)
+install_bundled_models()
 CONFIG = ROOT/'config.json'
 DEFAULT={'threshold':0.55,'detector':'yunet','detection_size':640,'cpu_threads':4,'active_packs':['SFace'],'flip_augmentation':True,'model_weights':{}}
 MODEL_REGISTRY = {
