@@ -141,3 +141,28 @@ def import_vectors_json(data):
             save_embedding(fid,model,vec);count+=1
         except Exception as e:errors.append(f'Row {i}: {e}')
     return {'imported':count,'errors':errors[:100]}
+
+def import_vectors_npz(raw):
+    """Import only numeric arrays keyed `<existing-face-id>_<model>`.
+    NumPy pickle execution is disabled. No people or identities are created.
+    """
+    import io,numpy as np
+    from registry import MODEL_REGISTRY
+    if len(raw)>30*1024*1024:raise ValueError('Maximum NPZ size is 30 MB')
+    with connect() as c: valid={int(r[0]) for r in c.execute('SELECT id FROM faces')}
+    imported=0;errors=[]
+    with np.load(io.BytesIO(raw),allow_pickle=False) as bundle:
+        if len(bundle.files)>50000:raise ValueError('NPZ exceeds 50,000 vectors')
+        for key in bundle.files:
+            try:
+                face_id,model=key.split('_',1)
+                fid=int(face_id)
+                if fid not in valid:raise ValueError('Face ID does not exist')
+                if model not in MODEL_REGISTRY:raise ValueError('Unknown model')
+                vec=bundle[key]
+                if vec.dtype.kind not in 'fiu':raise ValueError('Embedding must be numeric')
+                if vec.ndim!=1 or not 8<=vec.size<=4096:raise ValueError('Embedding length or rank invalid')
+                save_embedding(fid,model,np.asarray(vec,dtype=np.float32))
+                imported+=1
+            except Exception as exc:errors.append(f'{key}: {exc}')
+    return {'imported':imported,'errors':errors[:100]}
