@@ -208,7 +208,14 @@ async def import_vectors(file:UploadFile=File(...)):
     raw=await file.read()
     if len(raw)>30*1024*1024:raise HTTPException(413,'Maximum import size 30 MB')
     try:
-        output=database.import_vectors_json(json.loads(raw));database.rebuild_indexes();return output
+        if (file.filename or '').lower().endswith('.npz'):
+            output=database.import_vectors_npz(raw)
+        elif (file.filename or '').lower().endswith('.json'):
+            output=database.import_vectors_json(json.loads(raw))
+        else:
+            raise ValueError('Import requires a .json or .npz file')
+        database.rebuild_indexes()
+        return output
     except Exception as e:raise HTTPException(422,str(e))
 
 @app.post('/api/people/batch-folder')
