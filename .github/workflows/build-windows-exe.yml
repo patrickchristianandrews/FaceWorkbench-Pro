@@ -44,6 +44,18 @@ jobs:
         run: |
           python -m PyInstaller desktop.py --name FaceWorkbench-Pro --onefile --windowed --noconfirm --clean --add-data "static;static" --collect-all webview --collect-all onnxruntime --collect-all faiss --collect-submodules sklearn --hidden-import uvicorn.logging --hidden-import uvicorn.loops.auto --hidden-import uvicorn.protocols.http.auto --hidden-import uvicorn.lifespan.on
           if (!(Test-Path "dist/FaceWorkbench-Pro.exe")) { throw "Executable not created" }
+      - name: Verify compiled EXE starts without a console
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path 'dist/FaceWorkbench-Pro.exe').Path
+          $process = Start-Process -FilePath $exe -ArgumentList '--self-test' -PassThru
+          if (-not $process.WaitForExit(90000)) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            throw 'Packaged EXE startup timed out'
+          }
+          if ($process.ExitCode -ne 0) {
+            throw "Packaged EXE self-test failed with exit code $($process.ExitCode)"
+          }
       - name: Upload downloadable executable
         uses: actions/upload-artifact@v4
         with:
