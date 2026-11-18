@@ -10,7 +10,13 @@ def decode(raw):
 
 def detect(image):
     conf=settings(); h,w=image.shape[:2]; results=[]
-    if conf['detector']=='yunet' and (MODELS/MODEL_REGISTRY['YuNet']).exists():
+    if conf['detector']=='scrfd':
+        from scrfd import detect_scrfd
+        model_file=MODELS/MODEL_REGISTRY['SCRFD']
+        if not model_file.is_file():
+            raise RuntimeError('SCRFD model weights are not installed. Select YuNet or install det_10g.onnx.')
+        results=detect_scrfd(image,model_file,conf['detection_size'],threads=conf['cpu_threads'])
+    elif conf['detector']=='yunet' and (MODELS/MODEL_REGISTRY['YuNet']).exists():
         detector=cv2.FaceDetectorYN.create(str(MODELS/MODEL_REGISTRY['YuNet']),'',(w,h),score_threshold=0.7,nms_threshold=0.3)
         _, faces=detector.detect(image)
         for f in (faces if faces is not None else []):
