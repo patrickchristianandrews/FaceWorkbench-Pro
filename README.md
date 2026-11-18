@@ -2,11 +2,20 @@
 
 **Not the full 97-feature master-specification application.** This build implements genuine, local computation for many of the core workflows, but it is not appropriate to claim every listed capability is implemented, independently validated, or usable without additional weights. In particular, **no Windows EXE is included**; Windows compilation is performed by `build_windows.bat` on a Windows PC.
 
+## November 17 development update
+
+- Windows GitHub Actions now packages a **single-file** `FaceWorkbench-Pro.exe` and makes it available from the successful workflow run's **Artifacts** section.
+- Recognition supports configurable horizontal-flip embedding augmentation, per-model fusion weights, and independent session caching for multiple ONNX models.
+- The **System & Model Registry** workspace exposes augmentation and per-model weighting controls.
+- Studio offers secure-context webcam capture (localhost/HTTPS), analysis and image quality overlay.
+- Gallery enrollment checks the probe against existing embeddings and prompts when it may be a duplicate. Similarity warnings **do not confirm identity**.
+- Source and UI changes are not proof that model-specific inference and feature accuracy are validated. Only the installed compatible ONNX weights can provide recognition.
+
 ## Implemented
 
 - 8-workspace responsive dark UI and FastAPI + PyWebView native launcher.
 - Local OpenCV detection (fallback Haar and optional YuNet), face crop storage, quality gates, SQLite people and samples, rename / merge / delete.
-- Face embedding inference using OpenCV SFace or compatible ArcFace-like ONNX output pipelines, embedding storage, L2 normalization, 1:1 similarity and 1:N gallery search / lookalike ranking, per-model similarity scores, multi-model unweighted average fusion. Detection-dependent five-point geometric alignment for supported detector output.
+- Face embedding inference using OpenCV SFace or compatible ArcFace-like ONNX output pipelines, embedding storage, L2 normalization, optional mirror augmentation, 1:1 similarity and 1:N gallery search / lookalike ranking, per-model similarity scores, and configurable weighted fusion. Detection-dependent five-point geometric alignment for supported detector output.
 - SQLite embedding persistence, per-model FAISS exact inner-product index rebuild when `faiss-cpu` is installed, JSON/NPZ vector export, JSON vector import and backfill embeddings from saved crop images.
 - Empirical same-identity versus different-identity ROC / TAR / FAR calculations, cosine threshold estimates, hard-negative pairs, and logistic stacker **training** with scikit-learn. This does not mean calibrated probabilities are available in verification responses.
 - Greedy IoU bounding-box tracking, blur-all / mosaic and gallery-reference-based blur-matched / keep-matched video redaction. Audio is **not** carried into the MP4 output; visual detections must be reviewed for missed faces.
@@ -16,11 +25,11 @@
 ## Not yet implemented or not validated
 
 - SCRFD detection, dense 106/3D-68 landmark output and mesh, comprehensive 16-family model-specific adapters/verified model downloads. Many third-party weight files have no stable verified direct URL and may have separate terms and noncommercial licenses.
-- Flip augmentation, learned calibrated probability **inference**, operational biometric false positive verification, test-set FNIR/FPIR open-set statistics, reliable model-by-model accuracy comparison. The simple logistic stacker is trained on existing pairs but does not establish a calibrated match probability.
+- Learned calibrated probability **inference**, operational biometric false positive verification, test-set FNIR/FPIR open-set statistics, reliable model-by-model accuracy comparison. The simple logistic stacker is trained on existing pairs but does not establish a calibrated match probability.
 - Automatic discovery/storage of unknown-face crops and one-click promotion of unknown clusters. Clustering currently runs on saved face embeddings.
 - Liveness, age/sex/emotion/mask classification, OpenFace AU telemetry, eye-gaze, 3D pose, OSNet or learned person ReID across cuts.
-- Model-aware quality yaw gates and advanced behavior display, identity-duplicate modal, live WebRTC camera, real-time WebSocket process telemetry, authenticated LAN pairing and HTTPS certificate provisioning, all service-specific OSINT helpers.
-- Native Windows EXE and executable-on-Windows testing in this environment.
+- Model-aware quality yaw gates and advanced behavior display, full identity-duplicate merge modal, real-time WebSocket process telemetry, authenticated LAN pairing and HTTPS certificate provisioning, all service-specific OSINT helpers.
+- End-to-end usability, bundled model availability, and feature accuracy in the one-file Windows EXE are not fully validated. GitHub Actions compiles and runs automated smoke tests on Windows.
 
 ## Install and run (Windows, Python 3.11)
 
