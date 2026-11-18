@@ -87,3 +87,12 @@ def test_npz_import_refuses_unknown_face():
     result=database.import_vectors_npz(mem.getvalue())
     assert result['imported']==0
     assert result['errors']
+
+def test_packaged_uvicorn_config_without_console(monkeypatch):
+    """PyInstaller --windowed sets stderr/stdout to None; constructing the server must work."""
+    import desktop,sys
+    monkeypatch.setattr(sys,'stdout',None)
+    monkeypatch.setattr(sys,'stderr',None)
+    server=desktop.create_server(0)
+    assert server.config.log_config is None
+    assert server.config.access_log is False
